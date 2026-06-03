@@ -1,0 +1,417 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans, sans-serif); }
+.wrap { padding: 16px; }
+h2.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.header h3 { font-size: 15px; font-weight: 500; color: var(--color-text-primary); flex: 1; }
+.search-box { border: 0.5px solid var(--color-border-secondary); border-radius: 8px; padding: 6px 10px; font-size: 13px; width: 200px; background: var(--color-background-primary); color: var(--color-text-primary); }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; color: var(--color-text-secondary); }
+.leg-item { display: flex; align-items: center; gap: 6px; }
+.leg-dot { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.graph-wrap { overflow: auto; border: 0.5px solid var(--color-border-tertiary); border-radius: 8px; background: var(--color-background-secondary); position: relative; }
+svg { display: block; }
+.node-group { cursor: pointer; }
+.node-group rect { transition: filter 0.15s; }
+.node-group:hover rect { filter: brightness(1.08); }
+.node-group.highlighted rect { stroke-width: 2 !important; }
+.node-group.dimmed { opacity: 0.2; }
+.edge { transition: opacity 0.15s; }
+.edge.dimmed { opacity: 0.05; }
+.edge.highlighted { opacity: 1; stroke-width: 2; }
+.filter-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.pill { font-size: 12px; padding: 4px 10px; border-radius: 20px; cursor: pointer; border: 0.5px solid var(--color-border-secondary); background: var(--color-background-primary); color: var(--color-text-secondary); transition: all 0.15s; }
+.pill.active { background: var(--color-background-info); color: var(--color-text-info); border-color: transparent; }
+.tooltip { position: fixed; background: var(--color-background-primary); border: 0.5px solid var(--color-border-secondary); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--color-text-primary); box-shadow: 0 4px 16px rgba(0,0,0,0.12); max-width: 260px; pointer-events: none; z-index: 999; display: none; }
+.tooltip .tt-title { font-weight: 500; font-size: 13px; margin-bottom: 4px; }
+.tooltip .tt-row { color: var(--color-text-secondary); margin-top: 2px; }
+.tooltip .tt-dep { color: var(--color-text-info); }
+</style>
+<div class="wrap">
+<h2 class="sr-only">Field dependency diagram showing relationships between data fields, derived columns, and map table outputs.</h2>
+<div class="header">
+  <h3>Field dependency diagram</h3>
+  <input class="search-box" type="text" id="search" placeholder="Search field..." oninput="onSearch(this.value)">
+</div>
+<div class="filter-pills" id="pills"></div>
+<div class="legend">
+  <span class="leg-item"><span class="leg-dot" style="background:#5DCAA5"></span>Source / raw field</span>
+  <span class="leg-item"><span class="leg-dot" style="background:#378ADD"></span>Derived field</span>
+  <span class="leg-item"><span class="leg-dot" style="background:#EF9F27"></span>Map lookup result</span>
+  <span class="leg-item"><span class="leg-dot" style="background:#D85A30"></span>Output / final field</span>
+  <span class="leg-item"><span class="leg-dot" style="background:#7F77DD"></span>Connector / join field</span>
+</div>
+<div class="graph-wrap" id="graph-wrap">
+  <svg id="main-svg" width="2200" height="1680"></svg>
+</div>
+<div class="tooltip" id="tooltip"></div>
+</div>
+<script>
+const CATEGORIES = {
+  source: { label: 'Source / raw', fill: '#5DCAA5', stroke: '#0F6E56', text: '#04342C' },
+  derived: { label: 'Derived', fill: '#85B7EB', stroke: '#185FA5', text: '#042C53' },
+  map: { label: 'Map result', fill: '#FAC775', stroke: '#BA7517', text: '#412402' },
+  output: { label: 'Output / final', fill: '#F0997B', stroke: '#993C1D', text: '#4A1B0C' },
+  connector: { label: 'Connector', fill: '#AFA9EC', stroke: '#534AB7', text: '#26215C' },
+};
+
+const RAW_FIELDS = new Set([
+  'Source.Name','REP_DATE','BUS_DATE','Original_SYS_LOB','BRN_No','BRN_Name','CUST_ID','CUST_NAME',
+  'PRD_Cod','PRD_Desc','PROD_TYP','A-L','ACC_ID','TD_ID','Cur','ACC_OP_DAT','ST_DATE','MAT_DATE',
+  'TENOR','GL_NO','GL_DESC','ACC_STAT','BALANCE','FX_RATE','EGP_EQ','INT_RATE','COLL_BAL',
+  'COLL_CUR','COLLATERAL_AMT_LCY','DEF_RATE','SP_RATE','TOT_RATE','Balance_Type',
+  'MF1','HM1','Corresp_Prd','Corresp_GL','Corresp_IN-Out','TD-CD_Ratio',
+  'Area','Region','D_Tenor','Tenor_Order','Tenor Type',
+  'BD_Stat','BD_Order','RO','RM','SRM','TL','GH','DH','GH_SEG','GH_SEG2','BDM',
+  'L1','L2','L3','L4','Fin_MIS_Prod_PRE','Dept','Dept 2',
+  'Customer Name','EOY_FX_RATE','BUS_DATE (Year)',
+]);
+
+const MAP_OUTPUTS = new Set([
+  'Major Product','A and L','Balance Sheet Status','COD_GL_LIAB_BAL',
+  'Level 1','Level 2','Level 3','Level 4','Final Level - MIS GTB',
+  'Credit','status','STATUS','Order','Tenor Order','Tenor Type','Customer Name',
+  'LOB_2','Day_Type','Dept.','Dept2','GH','DH','In-Out','Type 1','Action',
+  'Relationship Officer','Relationship Manager','Senior Relationship Manager',
+  'Team Leader','Group Head','Department Head','CCY',
+]);
+
+const CONNECTORS = new Set([
+  'Connecor1','Connector1','Connector2','Connect_1','Connector 3','RM_Connect',
+  'Connector1','Dept_1','LOB_1','Synd_CUST','LOB',
+]);
+
+const FINAL_OUTPUTS = new Set([
+  'GL_Final','Pre-Final_GL','GL_Final','Tr-to-Cust Deposit',
+  'NORMALIZED_BAL','NORM_K','NORM_M','EGP_EQ_Total','EGP_EQ_Total_K','EGP_EQ_Total_M',
+  'Orig_Bal','Error_Check1','Collateral Status',
+]);
+
+const deps = [
+  ['L/F_1','Cur'],
+  ['Connecor1','Major Product'],['Connecor1','CUST_ID'],['Connecor1','L/F_1'],['Connecor1','L_Prod'],
+  ['Major Product','PRD_Cod'],
+  ['A/L Product','PRD_Cod'],['A/L Product','Coll_Status'],
+  ['L_Prod','Coll_Status'],
+  ['Coll_Status','COLLATERAL_AMT_LCY'],
+  ['A/L_Overall','L_Prod'],
+  ['Int. Rate Final','INT_RATE'],['Int. Rate Final','TOT_RATE'],
+  ['Int. Status','Int. Rate Final'],
+  ['L/F_2','Coll_Status'],['L/F_2','COLL_CUR'],
+  ['L/F_Final','Cur_Final'],
+  ['MF','MF1'],
+  ['A_L_LOB','PETROTRADE'],
+  ['PETROTRADE','BUS_DATE'],['PETROTRADE','CUST_ID'],
+  ['GHARABLY_SYND','CUST_ID'],['GHARABLY_SYND','ACC_ID'],
+  ['Synd_CUST','GHARABLY_SYND'],['Synd_CUST','CUST_ID'],
+  ['PRE_LOB','PETROTRADE'],
+  ['LOB','GHARABLY_SYND'],['LOB','PRE_LOB'],
+  ['LOB_1','LOB'],
+  ['Dept_1','LOB_1'],['Dept_1','Dept'],
+  ['Connector2','Dept 2'],['Connector2','L/F_Final'],['Connector2','Level2'],['Connector2','Level3'],
+  ['GL_ST','GL_NO'],
+  ['Pre-Final_GL','GL_ST'],['Pre-Final_GL','GL_NO'],
+  ['GL_Final','BUS_DATE'],['GL_Final','Corresp_IN-Out'],['GL_Final','Corresp_Prd'],['GL_Final','Corresp_GL'],['GL_Final','Pre-Final_GL'],
+  ['Tr-to-Cust Deposit','BUS_DATE'],['Tr-to-Cust Deposit','Corresp_IN-Out'],['Tr-to-Cust Deposit','Corresp_Prd'],
+  ['Level1','L_Prod'],['Level2','L_Prod'],['Level3','L_Prod'],['Level4','L_Prod'],['Final_Level_MIS','L_Prod'],
+  ['Orig_Bal','Coll_Status'],['Orig_Bal','COLL_BAL'],['Orig_Bal','BALANCE'],
+  ['EGP_EQ_Total','Coll_Status'],['EGP_EQ_Total','COLLATERAL_AMT_LCY'],['EGP_EQ_Total','EGP_EQ'],
+  ['EGP_EQ_Total_K','EGP_EQ_Total'],
+  ['EGP_EQ_Total_M','EGP_EQ_Total_K'],
+  ['Cur_Final','Coll_Status'],['Cur_Final','Cur'],['Cur_Final','COLL_CUR'],
+  ['Amended Tenor','TD-CD_Ratio'],['Amended Tenor','TENOR'],['Amended Tenor','D_Tenor'],
+  ['Cur_Filter','510_Check'],['Cur_Filter','Cur_Final'],
+  ['REM Order','Level2'],['REM Order','REM Order'],
+  ['REM Filter','REM Filter'],['REM Filter','CUST_ID'],
+  ['Relationship Officer','RO'],['Relationship Officer','Area'],
+  ['Relationship Manager','RM'],['Relationship Manager','Area'],
+  ['Senior Relationship Manager','SRM'],['Senior Relationship Manager','Area'],
+  ['Team Leader','TL'],['Team Leader','Region'],
+  ['Group Head','GH'],['Group Head','Region'],
+  ['Department Head','DH'],['Department Head','GH_SEG2'],
+  ['Calculated Column 1','GH'],['Calculated Column 1','GH_SEG2'],
+  ['Calculated Column 2','Original_SYS_LOB'],['Calculated Column 2','LOB'],
+  ['Dept 3','Dept 2'],
+  ['Connect_1','Dept_1'],['Connect_1','L/F_Final'],['Connect_1','Level2'],['Connect_1','Level3'],
+  ['Connector1','Dept 3'],['Connector1','L/F_Final'],['Connector1','Level2'],['Connector1','Level3'],
+  ['Collateral Status','GL_ST'],
+  ['MAT_DATE_2','MAT_DATE'],
+  ['TD_CHECK','MAT_DATE'],['TD_CHECK','BUS_DATE'],
+  ['MAT_YR','MAT_DATE'],
+  ['Check_Filter','TD_CHECK'],['Check_Filter','MAT_YR'],['Check_Filter','BUS_DATE'],
+  ['Error_Check1','Dept 3'],['Error_Check1','LOB'],['Error_Check1','On/Off Balance Sheet'],['Error_Check1','GL_Final'],
+  ['MAT_DATE_2 (Quarter)','MAT_DATE_2'],['MAT_DATE_2 (Month Index)','MAT_DATE_2'],['MAT_DATE_2 (Month)','MAT_DATE_2'],
+  ['510_Check','BUS_DATE'],['510_Check','PRD_Cod'],['510_Check','DEF_RATE'],
+  ['NORMALIZED_BAL','Orig_Bal'],['NORMALIZED_BAL','EOY_FX_RATE'],
+  ['NORM_K','NORMALIZED_BAL'],
+  ['NORM_M','NORMALIZED_BAL'],
+  ['Connector 3','LOB'],['Connector 3','L/F_Final'],['Connector 3','Level2'],['Connector 3','Level3'],
+  ['LB BD LOB','LOB'],
+  ['BUS_DATE (Quarter)','BUS_DATE'],['BUS_DATE (Month Index)','BUS_DATE'],['BUS_DATE (Month)','BUS_DATE'],
+];
+
+const allNodes = new Set();
+deps.forEach(([a,b]) => { allNodes.add(a); allNodes.add(b); });
+
+function getCategory(name) {
+  if (CONNECTORS.has(name)) return 'connector';
+  if (FINAL_OUTPUTS.has(name)) return 'output';
+  if (MAP_OUTPUTS.has(name)) return 'map';
+  if (RAW_FIELDS.has(name)) return 'source';
+  return 'derived';
+}
+
+const nodeList = [...allNodes];
+const W = 2200, H = 1680;
+const NW = 148, NH = 38, PX = 18, PY = 52;
+
+const groups = { source: [], derived: [], map: [], connector: [], output: [] };
+nodeList.forEach(n => groups[getCategory(n)].push(n));
+
+const positions = {};
+let colCount = Math.floor((W - PX*2 + 12) / (NW + 12));
+
+function layoutGroup(nodes, startY, label) {
+  const rows = [];
+  for (let i=0; i<nodes.length; i+=colCount) rows.push(nodes.slice(i,i+colCount));
+  rows.forEach((row, ri) => {
+    row.forEach((n, ci) => {
+      positions[n] = { x: PX + ci*(NW+12), y: startY + ri*(NH+10) };
+    });
+  });
+  return startY + Math.ceil(nodes.length/colCount)*(NH+10) + 24;
+}
+
+const SECTION_GAP = 36;
+let curY = PY;
+
+const sectionOrder = ['source','derived','map','connector','output'];
+const sectionLabels = { source:'Source / raw fields', derived:'Derived fields', map:'Map lookup results', connector:'Connector / join fields', output:'Output / final fields' };
+const sectionY = {};
+sectionOrder.forEach(cat => {
+  sectionY[cat] = curY + 18;
+  curY = layoutGroup(groups[cat], curY + 22, cat) + SECTION_GAP;
+});
+const SVG_H = curY + 30;
+
+const svg = document.getElementById('main-svg');
+svg.setAttribute('height', SVG_H);
+svg.setAttribute('viewBox', `0 0 ${W} ${SVG_H}`);
+
+const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
+['teal','blue','amber','coral','purple'].forEach((c,i) => {
+  const m = document.createElementNS('http://www.w3.org/2000/svg','marker');
+  const colors = ['#0F6E56','#185FA5','#BA7517','#993C1D','#534AB7'];
+  m.setAttribute('id',`arr-${c}`);
+  m.setAttribute('viewBox','0 0 10 10');
+  m.setAttribute('refX','8'); m.setAttribute('refY','5');
+  m.setAttribute('markerWidth','5'); m.setAttribute('markerHeight','5');
+  m.setAttribute('orient','auto-start-reverse');
+  const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+  p.setAttribute('d','M2 1L8 5L2 9');
+  p.setAttribute('fill','none');
+  p.setAttribute('stroke',colors[i]);
+  p.setAttribute('stroke-width','1.5');
+  p.setAttribute('stroke-linecap','round');
+  p.setAttribute('stroke-linejoin','round');
+  m.appendChild(p);
+  defs.appendChild(m);
+});
+svg.appendChild(defs);
+
+const edgeLayer = document.createElementNS('http://www.w3.org/2000/svg','g');
+edgeLayer.setAttribute('id','edge-layer');
+svg.appendChild(edgeLayer);
+
+const nodeLayer = document.createElementNS('http://www.w3.org/2000/svg','g');
+nodeLayer.setAttribute('id','node-layer');
+svg.appendChild(nodeLayer);
+
+const labelLayer = document.createElementNS('http://www.w3.org/2000/svg','g');
+labelLayer.setAttribute('id','label-layer');
+svg.appendChild(labelLayer);
+
+sectionOrder.forEach(cat => {
+  const catColor = CATEGORIES[cat];
+  const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+  t.setAttribute('x','10');
+  t.setAttribute('y', sectionY[cat]);
+  t.setAttribute('font-size','11');
+  t.setAttribute('font-weight','500');
+  t.setAttribute('font-family','var(--font-sans,sans-serif)');
+  t.setAttribute('fill', catColor.stroke);
+  t.setAttribute('opacity','0.75');
+  t.textContent = sectionLabels[cat].toUpperCase();
+  labelLayer.appendChild(t);
+  const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+  line.setAttribute('x1','0');
+  line.setAttribute('x2', W);
+  line.setAttribute('y1', sectionY[cat]+4);
+  line.setAttribute('y2', sectionY[cat]+4);
+  line.setAttribute('stroke', catColor.stroke);
+  line.setAttribute('stroke-width','0.4');
+  line.setAttribute('opacity','0.25');
+  labelLayer.appendChild(line);
+});
+
+const catMarker = { source:'teal', derived:'blue', map:'amber', output:'coral', connector:'purple' };
+const edgeEls = {};
+const seenEdges = new Set();
+
+deps.forEach(([from, to], idx) => {
+  const key = `${from}→${to}`;
+  if (seenEdges.has(key) || from === to) return;
+  seenEdges.add(key);
+  const p1 = positions[from], p2 = positions[to];
+  if (!p1 || !p2) return;
+  const x1 = p1.x + NW/2, y1 = p1.y + NH;
+  const x2 = p2.x + NW/2, y2 = p2.y;
+  const cat = getCategory(from);
+  const mc = catMarker[cat];
+  const strokeColor = CATEGORIES[cat].stroke;
+  const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+  const midY = (y1+y2)/2;
+  path.setAttribute('d', `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`);
+  path.setAttribute('fill','none');
+  path.setAttribute('stroke', strokeColor);
+  path.setAttribute('stroke-width','1');
+  path.setAttribute('opacity','0.35');
+  path.setAttribute('marker-end',`url(#arr-${mc})`);
+  path.setAttribute('class','edge');
+  path.dataset.from = from;
+  path.dataset.to = to;
+  edgeLayer.appendChild(path);
+  edgeEls[key] = path;
+});
+
+const nodeEls = {};
+nodeList.forEach(name => {
+  const pos = positions[name];
+  if (!pos) return;
+  const cat = getCategory(name);
+  const c = CATEGORIES[cat];
+  const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+  g.setAttribute('class','node-group');
+  g.setAttribute('data-name',name);
+  g.setAttribute('data-cat',cat);
+  const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+  rect.setAttribute('x', pos.x);
+  rect.setAttribute('y', pos.y);
+  rect.setAttribute('width', NW);
+  rect.setAttribute('height', NH);
+  rect.setAttribute('rx','6');
+  rect.setAttribute('fill', c.fill);
+  rect.setAttribute('stroke', c.stroke);
+  rect.setAttribute('stroke-width','0.6');
+  g.appendChild(rect);
+  const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+  label.setAttribute('x', pos.x + NW/2);
+  label.setAttribute('y', pos.y + NH/2);
+  label.setAttribute('text-anchor','middle');
+  label.setAttribute('dominant-baseline','central');
+  label.setAttribute('font-size','11');
+  label.setAttribute('font-weight','500');
+  label.setAttribute('font-family','var(--font-sans,sans-serif)');
+  label.setAttribute('fill', c.text);
+  label.setAttribute('pointer-events','none');
+  const displayName = name.length > 18 ? name.substring(0,16)+'…' : name;
+  label.textContent = displayName;
+  g.appendChild(label);
+  g.addEventListener('mouseenter', (e) => showTooltip(e, name));
+  g.addEventListener('mousemove', (e) => moveTooltip(e));
+  g.addEventListener('mouseleave', hideTooltip);
+  g.addEventListener('click', () => highlight(name));
+  nodeLayer.appendChild(g);
+  nodeEls[name] = g;
+});
+
+function getConnected(name) {
+  const upstream = deps.filter(([f,t])=>t===name).map(([f])=>f);
+  const downstream = deps.filter(([f,t])=>f===name).map(([,t])=>t);
+  return { upstream, downstream };
+}
+
+let activeNode = null;
+function highlight(name) {
+  if (activeNode === name) {
+    activeNode = null;
+    Object.values(nodeEls).forEach(g => { g.classList.remove('highlighted','dimmed'); });
+    Object.values(edgeEls).forEach(e => { e.classList.remove('highlighted','dimmed'); e.setAttribute('opacity','0.35'); });
+    return;
+  }
+  activeNode = name;
+  const { upstream, downstream } = getConnected(name);
+  const related = new Set([name, ...upstream, ...downstream]);
+  Object.values(nodeEls).forEach(g => {
+    const n = g.dataset.name;
+    if (related.has(n)) { g.classList.remove('dimmed'); g.classList.toggle('highlighted', n===name); }
+    else { g.classList.add('dimmed'); g.classList.remove('highlighted'); }
+  });
+  Object.values(edgeEls).forEach((e,k) => {
+    const f = e.dataset.from, t = e.dataset.to;
+    if (related.has(f) && related.has(t)) { e.classList.remove('dimmed'); e.classList.add('highlighted'); e.setAttribute('opacity','0.8'); }
+    else { e.classList.add('dimmed'); e.classList.remove('highlighted'); e.setAttribute('opacity','0.05'); }
+  });
+}
+
+const tooltip = document.getElementById('tooltip');
+function showTooltip(e, name) {
+  const { upstream, downstream } = getConnected(name);
+  const cat = getCategory(name);
+  let html = `<div class="tt-title">${name}</div>`;
+  html += `<div class="tt-row">Category: ${CATEGORIES[cat].label}</div>`;
+  if (upstream.length) html += `<div class="tt-row">Depends on: <span class="tt-dep">${upstream.slice(0,5).join(', ')}${upstream.length>5?'…':''}</span></div>`;
+  if (downstream.length) html += `<div class="tt-row">Used by: <span class="tt-dep">${downstream.slice(0,5).join(', ')}${downstream.length>5?'…':''}</span></div>`;
+  html += `<div class="tt-row" style="margin-top:4px;color:var(--color-text-tertiary);font-size:11px">Click to highlight connections</div>`;
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+  moveTooltip(e);
+}
+function moveTooltip(e) {
+  tooltip.style.left = (e.clientX + 14) + 'px';
+  tooltip.style.top = (e.clientY - 10) + 'px';
+}
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+function onSearch(val) {
+  val = val.toLowerCase().trim();
+  Object.values(nodeEls).forEach(g => {
+    const n = g.dataset.name.toLowerCase();
+    if (!val || n.includes(val)) { g.classList.remove('dimmed'); }
+    else { g.classList.add('dimmed'); }
+  });
+  if (!val) {
+    Object.values(edgeEls).forEach(e => { e.setAttribute('opacity','0.35'); e.classList.remove('dimmed'); });
+  } else {
+    const matched = nodeList.filter(n => n.toLowerCase().includes(val));
+    Object.values(edgeEls).forEach(e => {
+      const f = e.dataset.from, t = e.dataset.to;
+      if (matched.includes(f) || matched.includes(t)) { e.setAttribute('opacity','0.4'); e.classList.remove('dimmed'); }
+      else { e.classList.add('dimmed'); e.setAttribute('opacity','0.05'); }
+    });
+  }
+}
+
+const pillsEl = document.getElementById('pills');
+['all',...sectionOrder].forEach(cat => {
+  const pill = document.createElement('button');
+  pill.className = 'pill' + (cat==='all' ? ' active' : '');
+  pill.textContent = cat === 'all' ? 'All' : CATEGORIES[cat].label;
+  pill.onclick = () => {
+    document.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));
+    pill.classList.add('active');
+    activeNode = null;
+    Object.values(nodeEls).forEach(g => {
+      if (cat === 'all' || g.dataset.cat === cat) { g.classList.remove('dimmed'); }
+      else { g.classList.add('dimmed'); }
+    });
+    Object.values(edgeEls).forEach(e => {
+      const fc = getCategory(e.dataset.from), tc = getCategory(e.dataset.to);
+      if (cat === 'all' || fc === cat || tc === cat) { e.setAttribute('opacity','0.35'); e.classList.remove('dimmed'); }
+      else { e.classList.add('dimmed'); e.setAttribute('opacity','0.05'); }
+    });
+  };
+  pillsEl.appendChild(pill);
+});
+</script>
